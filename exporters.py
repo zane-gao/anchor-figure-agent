@@ -10,7 +10,7 @@ from pptx.dml.color import RGBColor
 from pptx.enum.shapes import MSO_AUTO_SHAPE_TYPE, MSO_CONNECTOR
 from pptx.util import Emu
 
-from .models import BBox, FigureSceneGraph, SceneEdge, SceneGroup, SceneNode
+from .models import BBox, FigureSceneGraph, HierarchyUnit, SceneEdge, SceneGroup, SceneNode
 
 
 EMU_PER_PIXEL = 9525
@@ -89,6 +89,14 @@ def _group_style(scene: FigureSceneGraph, group: SceneGroup) -> dict[str, str]:
     return style
 
 
+def _hierarchy_style(unit: HierarchyUnit) -> dict[str, str]:
+    if unit.level == "module":
+        return {"fill": "#E0F2FE", "stroke": "#3B82F6", "text": "#1E3A8A"}
+    if unit.level == "region":
+        return {"fill": "#ECFDF5", "stroke": "#10B981", "text": "#065F46"}
+    return {"fill": "#FFFFFF", "stroke": "#94A3B8", "text": "#475569"}
+
+
 def orthogonal_route(source: BBox, target: BBox, direction: str = "right") -> list[tuple[float, float]]:
     if direction == "down":
         start = (source.center_x, source.bottom)
@@ -128,6 +136,30 @@ def render_scene_to_png(scene: FigureSceneGraph, output_path: str | Path, scale:
     draw = ImageDraw.Draw(image)
     font = _load_font(max(14, int(scene.style_tokens.font_size * scale)))
     title_font = _load_font(max(16, int(scene.style_tokens.title_size * scale)))
+
+    for unit in scene.hierarchy_units:
+        if unit.level not in {"module", "region"} or unit.bbox is None:
+            continue
+        style = _hierarchy_style(unit)
+        box = [
+            unit.bbox.x * scale,
+            unit.bbox.y * scale,
+            unit.bbox.right * scale,
+            unit.bbox.bottom * scale,
+        ]
+        draw.rounded_rectangle(
+            box,
+            radius=int(scene.style_tokens.corner_radius * scale),
+            fill=style["fill"],
+            outline=style["stroke"],
+            width=max(1, int(scene.style_tokens.stroke_width * scale)),
+        )
+        draw.text(
+            (unit.bbox.x * scale + 14, unit.bbox.y * scale + 8),
+            unit.label,
+            fill=style["text"],
+            font=font,
+        )
 
     for group in sorted(scene.groups, key=lambda item: item.bbox.y):
         style = _group_style(scene, group)
@@ -227,6 +259,19 @@ def export_scene_to_svg(scene: FigureSceneGraph, output_path: str | Path) -> Pat
         '<defs><marker id="arrow" markerWidth="12" markerHeight="12" refX="10" refY="6" orient="auto"><path d="M0,0 L12,6 L0,12 z" fill="#2563EB" /></marker></defs>',
         f'<rect width="{scene.width}" height="{scene.height}" fill="{scene.style_tokens.palette["background"]}" />',
     ]
+    for unit in scene.hierarchy_units:
+        if unit.level not in {"module", "region"} or unit.bbox is None:
+            continue
+        style = _hierarchy_style(unit)
+        parts.append(
+            f'<rect x="{unit.bbox.x}" y="{unit.bbox.y}" width="{unit.bbox.width}" height="{unit.bbox.height}" '
+            f'rx="{scene.style_tokens.corner_radius}" ry="{scene.style_tokens.corner_radius}" '
+            f'fill="{style["fill"]}" fill-opacity="0.42" stroke="{style["stroke"]}" stroke-width="2" />'
+        )
+        parts.append(
+            f'<text x="{unit.bbox.x + 14}" y="{unit.bbox.y + 24}" fill="{style["text"]}" '
+            f'font-size="{scene.style_tokens.font_size - 4}" font-family="{escape(scene.style_tokens.font_family)}">{escape(unit.label)}</text>'
+        )
     for group in scene.groups:
         style = _group_style(scene, group)
         parts.append(
@@ -312,6 +357,19 @@ def export_scene_to_pptx(scene: FigureSceneGraph, output_path: str | Path) -> Pa
     bg_shape.fill.solid()
     bg_shape.fill.fore_color.rgb = _hex_to_rgb_color(scene.style_tokens.palette["background"])
     bg_shape.line.fill.background()
+
+    for unit in scene.hierarchy_units:
+        if unit.level not in {"module", "region"} or unit.bbox is None:
+            continue
+        style = _hierarchy_style(unit)
+        x, y, w, h = _bbox_to_emu(unit.bbox)
+        shape = slide.shapes.add_shape(MSO_AUTO_SHAPE_TYPE.ROUNDED_RECTANGLE, x, y, w, h)
+        shape.fill.solid()
+        shape.fill.fore_color.rgb = _hex_to_rgb_color(style["fill"])
+        shape.fill.transparency = 0.3
+        shape.line.color.rgb = _hex_to_rgb_color(style["stroke"])
+        shape.line.width = Emu(2 * 12700)
+        _apply_shape_text(shape, unit.label, scene.style_tokens.font_size - 4, _hex_to_rgb_color(style["text"]))
 
     for group in scene.groups:
         style = _group_style(scene, group)

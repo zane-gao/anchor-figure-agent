@@ -6,7 +6,6 @@ from urllib.parse import urlparse
 import base64
 import json
 import mimetypes
-import tempfile
 import time
 
 from .agents import FigureEditPipeline
@@ -18,12 +17,12 @@ def _safe_relative(path: Path, base: Path) -> str:
     return str(path.resolve().relative_to(base.resolve())).replace("\\", "/")
 
 
-def _read_case(case_dir: Path) -> dict:
+def _read_case(case_dir: Path, base_root: Path) -> dict:
     meta = load_json(case_dir / "case_meta.json")
     return {
         "case_id": case_dir.name,
-        "draft_image": f"/files/{_safe_relative(case_dir / 'draft.png', case_dir.parent)}",
-        "target_image": f"/files/{_safe_relative(case_dir / 'target.png', case_dir.parent)}",
+        "draft_image": f"/files/{_safe_relative(case_dir / 'draft.png', base_root)}",
+        "target_image": f"/files/{_safe_relative(case_dir / 'target.png', base_root)}",
         "caption": (case_dir / "caption.txt").read_text(encoding="utf-8"),
         "edit_goal": (case_dir / "edit_goal.txt").read_text(encoding="utf-8"),
         "paper_context": (case_dir / "paper_context.txt").read_text(encoding="utf-8"),
@@ -33,6 +32,7 @@ def _read_case(case_dir: Path) -> dict:
 
 def build_server(root_dir: str | Path, port: int = 8765) -> ThreadingHTTPServer:
     root_dir = Path(root_dir).resolve()
+    cases_root = root_dir / "cases" if (root_dir / "cases").exists() else root_dir
     runs_dir = ensure_dir(root_dir / ".web_runs")
     static_dir = Path(__file__).resolve().parent.parent / "web"
 
@@ -62,7 +62,7 @@ def build_server(root_dir: str | Path, port: int = 8765) -> ThreadingHTTPServer:
             self._send_file(static_dir / relative)
 
         def _list_examples(self) -> list[dict]:
-            return [_read_case(case_dir) for case_dir in sorted(root_dir.iterdir()) if case_dir.is_dir() and (case_dir / "case_meta.json").exists()]
+            return [_read_case(case_dir, root_dir) for case_dir in sorted(cases_root.iterdir()) if case_dir.is_dir() and (case_dir / "case_meta.json").exists()]
 
         def do_GET(self) -> None:
             parsed = urlparse(self.path)
@@ -98,7 +98,7 @@ def build_server(root_dir: str | Path, port: int = 8765) -> ThreadingHTTPServer:
             draft_image = ""
             draft_manifest = None
             if case_id:
-                case_dir = root_dir / case_id
+                case_dir = cases_root / case_id
                 if not case_dir.exists():
                     self._send_json({"error": f"case {case_id} not found"}, status=404)
                     return
@@ -139,8 +139,8 @@ def build_server(root_dir: str | Path, port: int = 8765) -> ThreadingHTTPServer:
                 {
                     "artifacts": {
                         "revised_png": f"/files/{_safe_relative(Path(artifacts.revised_png), root_dir)}",
-                        "editable_svg": f"/files/{_safe_relative(Path(artifacts.editable_svg), root_dir)}",
-                        "editable_pptx": f"/files/{_safe_relative(Path(artifacts.editable_pptx), root_dir)}",
+                        "editable_svg": f"/files/{_safe_relative(Path(artifacts.editable_svg), root_dir)}" if artifacts.editable_svg else None,
+                        "editable_pptx": f"/files/{_safe_relative(Path(artifacts.editable_pptx), root_dir)}" if artifacts.editable_pptx else None,
                         "scene_graph_json": f"/files/{_safe_relative(Path(artifacts.scene_graph_json), root_dir)}",
                         "edit_report_json": f"/files/{_safe_relative(Path(artifacts.edit_report_json), root_dir)}",
                     },

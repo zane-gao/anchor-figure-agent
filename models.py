@@ -217,6 +217,53 @@ class AssetRef:
 
 
 @dataclass
+class HierarchyUnit:
+    id: str
+    level: str
+    label: str
+    parent_id: str | None = None
+    child_ids: list[str] = field(default_factory=list)
+    node_ids: list[str] = field(default_factory=list)
+    edge_ids: list[str] = field(default_factory=list)
+    group_ids: list[str] = field(default_factory=list)
+    bbox: BBox | None = None
+    confidence: float = 1.0
+    source: str = "heuristic"
+    metadata: dict[str, Any] = field(default_factory=dict)
+
+    def to_dict(self) -> dict[str, Any]:
+        data = asdict(self)
+        data["bbox"] = self.bbox.to_dict() if self.bbox is not None else None
+        return data
+
+    @classmethod
+    def from_dict(cls, data: dict[str, Any]) -> "HierarchyUnit":
+        payload = dict(data)
+        payload["bbox"] = BBox.from_dict(data["bbox"]) if data.get("bbox") else None
+        return cls(**payload)
+
+
+@dataclass
+class HierarchyRelation:
+    id: str
+    relation_type: str
+    source_unit_id: str
+    target_unit_id: str
+    level: str
+    confidence: float = 1.0
+    metadata: dict[str, Any] = field(default_factory=dict)
+
+
+@dataclass
+class HierarchyState:
+    root_id: str | None = None
+    level_index: dict[str, list[str]] = field(default_factory=dict)
+    source: str = "heuristic"
+    confidence: float = 1.0
+    metadata: dict[str, Any] = field(default_factory=dict)
+
+
+@dataclass
 class FigureSceneGraph:
     width: int
     height: int
@@ -228,6 +275,11 @@ class FigureSceneGraph:
     constraints: list[LayoutConstraint] = field(default_factory=list)
     style_tokens: StyleTokens = field(default_factory=StyleTokens)
     asset_refs: list[AssetRef] = field(default_factory=list)
+    hierarchy_units: list[HierarchyUnit] = field(default_factory=list)
+    hierarchy_relations: list[HierarchyRelation] = field(default_factory=list)
+    hierarchy_root_id: str | None = None
+    hierarchy_state: HierarchyState | None = None
+    decomposition_report: dict[str, Any] = field(default_factory=dict)
     metadata: dict[str, Any] = field(default_factory=dict)
 
     def clone(self) -> "FigureSceneGraph":
@@ -242,6 +294,12 @@ class FigureSceneGraph:
     def edge_map(self) -> dict[str, SceneEdge]:
         return {edge.id: edge for edge in self.edges}
 
+    def hierarchy_unit_map(self) -> dict[str, HierarchyUnit]:
+        return {unit.id: unit for unit in self.hierarchy_units}
+
+    def hierarchy_units_by_level(self, level: str) -> list[HierarchyUnit]:
+        return [unit for unit in self.hierarchy_units if unit.level == level]
+
     def to_dict(self) -> dict[str, Any]:
         return {
             "width": self.width,
@@ -254,6 +312,11 @@ class FigureSceneGraph:
             "constraints": [asdict(constraint) for constraint in self.constraints],
             "style_tokens": asdict(self.style_tokens),
             "asset_refs": [asdict(asset) for asset in self.asset_refs],
+            "hierarchy_units": [unit.to_dict() for unit in self.hierarchy_units],
+            "hierarchy_relations": [asdict(relation) for relation in self.hierarchy_relations],
+            "hierarchy_root_id": self.hierarchy_root_id,
+            "hierarchy_state": asdict(self.hierarchy_state) if self.hierarchy_state else None,
+            "decomposition_report": self.decomposition_report,
             "metadata": self.metadata,
         }
 
@@ -276,6 +339,15 @@ class FigureSceneGraph:
             ],
             style_tokens=StyleTokens(**data.get("style_tokens", {})),
             asset_refs=[AssetRef(**asset) for asset in data.get("asset_refs", [])],
+            hierarchy_units=[
+                HierarchyUnit.from_dict(unit) for unit in data.get("hierarchy_units", [])
+            ],
+            hierarchy_relations=[
+                HierarchyRelation(**relation) for relation in data.get("hierarchy_relations", [])
+            ],
+            hierarchy_root_id=data.get("hierarchy_root_id"),
+            hierarchy_state=HierarchyState(**data["hierarchy_state"]) if data.get("hierarchy_state") else None,
+            decomposition_report=data.get("decomposition_report", {}),
             metadata=data.get("metadata", {}),
         )
 
@@ -392,14 +464,37 @@ class PipelineRequest:
     reference_figures: list[str] = field(default_factory=list)
     draft_manifest: str | None = None
     max_iterations: int = 4
+    random_seed: int = 0
+    pipeline_config: "PipelineConfig | None" = None
+
+
+@dataclass
+class PipelineConfig:
+    method_name: str = "AnchorFigure-Full"
+    use_verifier: bool = True
+    use_context_matching: bool = True
+    use_semantic_anchors: bool = True
+    use_layout_anchors: bool = True
+    use_hierarchy_decomposition: bool = True
+    use_hierarchical_team: bool = True
+    use_hierarchy_metrics: bool = True
+    use_layout_planner: bool = True
+    use_retoucher: bool = True
+    use_critic_loop: bool = True
+    enforce_editable_export: bool = True
+    export_svg: bool = True
+    export_pptx: bool = True
+    hierarchy_levels: list[str] = field(default_factory=lambda: ["global", "module", "region", "block", "element"])
+    hierarchy_from_groups_first: bool = True
+    max_iterations_override: int | None = None
+    metadata: dict[str, Any] = field(default_factory=dict)
 
 
 @dataclass
 class PipelineArtifacts:
     revised_png: str
     scene_graph_json: str
-    editable_pptx: str
-    editable_svg: str
+    editable_pptx: str | None
+    editable_svg: str | None
     edit_report_json: str
     memory_json: str
-
